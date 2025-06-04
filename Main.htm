@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Patient Records</title>
+    <style>
+        body {
+            font-family: Tahoma, Verdana, Segoe UI, sans-serif;
+            font-size: smaller;
+        }
+        a:hover {
+            cursor: pointer;
+        }
+        table.dataTable {
+            margin: 0;
+        }
+        .canvasDiv {
+            min-width: 600px;
+            display: inline-block;
+            margin-bottom: 50px;
+        }
+        .canvasDiv.piechart {
+            min-width: 600px;
+            margin-right: 50px;
+        }
+        .canvasDiv.rowchart {
+            min-width: 500px;
+            margin-right: 50px;
+        }
+        .canvasDiv.radarchart {
+            min-width: 550px;
+        }
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Patient Records</h1>
+
+    <div id="main">
+    </div>
+    <div id="table" class="display">
+
+    </div>
+
+
+    <link rel="stylesheet" href="https://cdn.datatables.net/2.3.1/css/dataTables.dataTables.css" />
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://cdn.datatables.net/2.3.1/js/dataTables.js"></script>
+
+    <!-- Add the Chart.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Include Handlebars from a CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/handlebars@latest/dist/handlebars.js"></script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-app.js";
+        import { getFirestore, collection, getDocs, doc, getDoc, query } from "https://www.gstatic.com/firebasejs/11.8.1/firebase-firestore.js"; // Import getFirestore and other Firestore functions
+
+        // Firebase configuration
+        const firebaseConfig =
+        {
+            apiKey: "AIzaSyB3-pM-dr_HGXpLyE-vxXCrJn8vPUnw37Q",
+            authDomain: "rn-firebase-ml-test.firebaseapp.com",
+            databaseURL: "https://rn-firebase-ml-test-default-rtdb.firebaseio.com",
+            projectId: "rn-firebase-ml-test",
+            storageBucket: "rn-firebase-ml-test.firebasestorage.app",
+            messagingSenderId: "964593574138",
+            appId: "1:964593574138:web:815a05431b322d81312943",
+            measurementId: "G-CR54SS9S8P"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+
+        // Initialize Cloud Firestore and get a reference to the service
+        const db = getFirestore(app);
+        console.log("Firestore initialized!");
+
+        function getMean(arr) {
+            var total = 0;
+            for (var i = 0; i < arr.length; i++) {
+                total += arr[i];
+            }
+            var avg = total / arr.length;
+
+            return avg;
+        }
+
+        function getHealthStatus(documentData) {
+            
+            const systolicArr = documentData.vitals.blood_pressure.map(x => { return parseInt(x.split('/')[0])});
+            const systolicMean = Math.round(getMean(systolicArr));
+
+            const diastolicArr = documentData.vitals.blood_pressure.map(x => { return parseInt(x.split('/')[1])});
+            const diastolicMean = Math.round(getMean(diastolicArr));
+
+            const heartRateMean = getMean(documentData.vitals.heart_rate);
+
+            const sleepDuration = documentData.sleep.duration_hours >= 7;
+            const bpAvgSys = systolicMean < 125;
+            const bpAvgDia = diastolicMean < 85;
+            const heartRate = heartRateMean < 75;
+            const activeMins = documentData.activity.active_minutes >= 45;
+            const steps = documentData.activity.steps >= 8000;
+
+            let conditions = [sleepDuration, bpAvgSys, bpAvgDia, heartRate, activeMins, steps];
+            let violations = 0;
+            conditions.forEach(v => v == false ? violations++ : v);
+
+            if (violations == 0) {
+                return "Good";
+            }
+            else if (violations <= 2) {
+                return "Moderate";
+            }
+            return "Poor";
+        }
+
+        async function getData() {
+            const collectionPath = "patientData";
+            const theQuery = query(collection(db, collectionPath));
+
+            let querySnapshot = await getDocs(theQuery);
+
+            let documentsJson = {};
+            documentsJson.documents = [];
+
+            let i = 0;
+            querySnapshot.forEach((d) => {
+                i++;
+                const documentData = d.data();
+                documentData.document_id = d.id;
+
+                // Calculate health status
+                documentData.health_status = getHealthStatus(documentData);
+
+                documentsJson.documents.push(documentData);
+            });
+
+            const jsonDocumentsString = JSON.stringify(documentsJson, null, 2);
+            const blob = new Blob([jsonDocumentsString], { type: 'application/json' });
+
+            // Create a download link for the JSON to use by the Python script
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `patientdata.json`; 
+            a.innerHTML = "Download patient data JSON file";
+            document.body.appendChild(a);
+
+            i = 0;
+            documentsJson.documents.forEach((d) => {
+
+                i++;
+                const documentData = d;
+                const jsonString = JSON.stringify(documentData, null, 2); // Use null, 2 for pretty printing
+                console.log(jsonString);
+
+            });
+
+            return documentsJson;
+        }
+        
+		// Get data from Firebase
+        let documentsJson = await getData();
+        console.log(documentsJson);
+        
+        const mainDiv = document.getElementById("main");
+        
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Create Health Status pie chart
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        const healthStatusCanvasDiv = document.createElement("div");
+        healthStatusCanvasDiv.classList.add("canvasDiv");
+        healthStatusCanvasDiv.classList.add("piechart");
+
+        const healthStatusCanvas = document.createElement("canvas");
+        healthStatusCanvasDiv.appendChild(healthStatusCanvas);
+
+        const healthStatusCanvasContext = healthStatusCanvas.getContext('2d');
+
+        let goodCondition = 0;
+        let moderateCondition = 0;
+        let poorCondition = 0;
+        documentsJson.documents.forEach((d) => {
+            if (d.health_status == "Good") {
+                goodCondition++;
+            }
+            else if (d.health_status == "Moderate") {
+                moderateCondition++;
+            }
+            else {
+                poorCondition++;
+            }
+        });
+
+        const healthStatusData = [goodCondition, moderateCondition, poorCondition];
+
+        const backgroundColors = [
+            'rgb(80, 200, 120)', // Green (for Good)
+            'rgba(255, 159, 64, 0.8)', // Orange for Moderate)
+            'rgba(255, 99, 132, 0.8)'  // Red (for Poor)
+        ];
+
+        const healthStatusChartData = {
+            labels: ['Good', 'Moderate', 'Poor'],
+            datasets: [{
+                label: 'Health Status',
+                data: healthStatusData, 
+                backgroundColor: backgroundColors,
+                hoverOffset: 4 
+            }]
+        };
+
+        const healthStatusChart = new Chart(healthStatusCanvasContext, {
+            type: 'pie', 
+            data: healthStatusChartData,
+            options: {
+                responsive: true, // Chart will resize with the parent container
+                maintainAspectRatio: false, // Allows setting custom size via CSS
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Health Status'
+                    },
+                    tooltip: { 
+                        callbacks: {
+                            label: function (context) {
+                                let label = context.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+
+                                const total = healthStatusData.reduce((sum, currentValue) => sum + currentValue, 0);
+
+                                // Display value in grams and calculate percentage
+                                if (context.raw !== null && total > 0) {
+                                    const value = context.raw;
+                                    const percentage = ((value / total) * 100).toFixed(1);
+                                    label += `${value} (${percentage}%)`;
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                },
+                animation: {
+                    animateRotate: false,
+                    animateScale: true
+                }
+            }
+        });
+        
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Create Steps vertical bar chart
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        
+        const stepsCanvasDiv = document.createElement("div");
+        stepsCanvasDiv.classList.add("canvasDiv");
+
+        const stepsCanvas = document.createElement("canvas");
+        stepsCanvasDiv.appendChild(stepsCanvas);
+
+        const stepsCanvasContext = stepsCanvas.getContext('2d');
+
+        let dailyStepsList = [];
+        documentsJson.documents.forEach((d) => {
+            dailyStepsList.push(d.activity.steps);
+        });
+
+        const stepRanges = [
+            { min: 0, max: 1999, label: '0-1999' },
+            { min: 2000, max: 3999, label: '2000-3999' },
+            { min: 4000, max: 5999, label: '4000-5999' },
+            { min: 6000, max: 7999, label: '6000-7999' },
+            { min: 8000, max: 9999, label: '8000-9999' },
+            { min: 10000, max: Infinity, label: '10000+' } // Use Infinity for the last range
+        ];
+
+        // Extract just the labels for the chart's X-axis
+        const stepsBarLabels = stepRanges.map(range => range.label); 
+
+        const rangeCounts = new Array(stepRanges.length).fill(0);
+
+        if (dailyStepsList && dailyStepsList.length > 0) {
+            dailyStepsList.forEach(steps => {
+                for (let i = 0; i < stepRanges.length; i++) {
+                    if (steps >= stepRanges[i].min && steps <= stepRanges[i].max) {
+                        rangeCounts[i]++; 
+                        break; 
+                    }
+                }
+            });
+
+            const barColours = [
+                'rgba(255, 99, 132, 0.8)', 
+                'rgba(127, 0, 255, 0.8)',
+                'rgba(255, 87, 51, 0.7)',
+                'rgba(54, 162, 235, 0.8)',
+                'rgba(100, 100, 100, 0.8)',
+                'rgba(13, 66, 32, 0.8)',
+            ];
+
+            const stepsChartData = {
+                labels: stepsBarLabels,
+                datasets: [{
+                    label: 'Patients Count',
+                    data: rangeCounts,
+                    backgroundColor: barColours, 
+                    borderWidth: 1
+                }]
+            };
+
+            const stepsChart = new Chart(stepsCanvasContext, {
+                type: 'bar', 
+                data: stepsChartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { 
+                            beginAtZero: true, 
+                            title: {
+                                display: true,
+                                text: 'Patients Count'
+                            },
+                            ticks: {
+                                stepSize: 1, 
+                                callback: function (value) { if (value % 1 === 0) return value; } 
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Daily Steps' 
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Distribution of Daily Steps'
+                        },
+                        legend: { 
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+        
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Create Calories against Sleep Hours bubble chart (different dataset for each Health Status, size
+        // of bubble based on Steps)
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        const bubbleCanvasDiv = document.createElement("div");
+        bubbleCanvasDiv.classList.add("canvasDiv");
+
+        const bubbleCanvas = document.createElement("canvas");
+        bubbleCanvasDiv.appendChild(bubbleCanvas);
+
+        const bubbleCanvasContext = bubbleCanvas.getContext('2d');
+
+        const goodStatusData = [];
+        const moderateStatusData = [];
+        const poorStatusData = [];
+        documentsJson.documents.forEach((d) => {
+            
+            const val = {
+                x: d.sleep.duration_hours,
+                y: d.nutrition.calories,
+                r: Math.round(d.activity.steps / 500),
+                steps: d.activity.steps
+            }
+            if (d.health_status == "Good") {
+                goodStatusData.push(val);
+            }
+            else if (d.health_status == "Moderate") {
+                moderateStatusData.push(val);
+            }
+            else {
+                poorStatusData.push(val);
+            }
+        });
+        
+        // define colors for each status dataset
+        const goodColor = 'rgba(75, 192, 192, 0.6)';
+        const moderateColor = 'rgba(255, 159, 64, 0.6)'; 
+        const poorColor = 'rgba(255, 99, 132, 0.6)';
+
+        const goodBorderColor = 'rgba(75, 192, 192, 1)';
+        const moderateBorderColor = 'rgba(255, 159, 64, 1)';
+        const poorBorderColor = 'rgba(255, 99, 132, 1)';
+        
+        const bubbleDatasets = [];
+
+        if (goodStatusData.length > 0) {
+            bubbleDatasets.push({
+                label: 'Good Status',
+                data: goodStatusData,
+                backgroundColor: goodColor,
+                borderColor: goodBorderColor,
+                borderWidth: 2
+            });
+        }
+
+        if (moderateStatusData.length > 0) {
+            bubbleDatasets.push({
+                label: 'Moderate Status',
+                data: moderateStatusData, 
+                backgroundColor: moderateColor,
+                borderColor: moderateBorderColor,
+                borderWidth: 2
+            });
+        }
+
+        if (poorStatusData.length > 0) {
+            bubbleDatasets.push({
+                label: 'Poor Status',
+                data: poorStatusData,
+                backgroundColor: poorColor,
+                borderColor: poorBorderColor,
+                borderWidth: 2
+            });
+        }
+        
+        const bubbleChartData = {
+            datasets: bubbleDatasets
+        };
+
+        const bubbleChart = new Chart(bubbleCanvasContext, {
+            type: 'bubble',
+            data: bubbleChartData, 
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { 
+                        title: {
+                            display: true,
+                            text: 'Sleep Duration (Hours)' 
+                        },
+                        beginAtZero: false, 
+                    },
+                    y: { 
+                        title: {
+                            display: true,
+                            text: 'Calories Intake'
+                        },
+                        beginAtZero: false, 
+                        min: 1500,
+                        max: 2700, 
+                        ticks: {
+                            stepSize: 200 
+                        }
+                    }
+                },
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Sleep Duration vs. Calories by Health Status by Steps'
+                    },
+                    legend: { 
+                        display: true,
+                        position: 'top',
+                    },
+                    tooltip: { 
+                        callbacks: {
+                            label: function (context) {
+                                const datasetLabel = context.dataset.label || ''; 
+                                const dataPoint = context.raw;
+                                return `${datasetLabel}: Sleep ${dataPoint.x}h, Calories ${dataPoint.y}, Steps ${dataPoint.steps}`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Create Sleep Quality doughnut chart
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        const sleepQualityCanvasDiv = document.createElement("div");
+        sleepQualityCanvasDiv.classList.add("canvasDiv");
+        sleepQualityCanvasDiv.classList.add("piechart");
+
+        const sleepQualityCanvas = document.createElement("canvas");
+        sleepQualityCanvasDiv.appendChild(sleepQualityCanvas);
+
+        const sleepQualityCanvasContext = sleepQualityCanvas.getContext('2d');
+        
+        poorCondition = 0;
+        let fairCondition = 0;
+        goodCondition = 0;
+        let excellentCondition = 0;
+
+        documentsJson.documents.forEach((d) => {
+            if (d.sleep.quality == "poor") {
+                poorCondition++;
+            }
+            else if (d.sleep.quality == "fair") {
+                fairCondition++;
+            }
+            else if (d.sleep.quality == "good") {
+                goodCondition++;
+            }
+            else {
+                excellentCondition++;
+            }
+        });
+
+        const sleepQualityData = [excellentCondition, goodCondition, moderateCondition, poorCondition];
+
+        const sleepQualityBackgroundColors = [
+            'rgb(0, 150, 255)',
+            'rgb(80, 200, 120)',
+            'rgba(255, 159, 64, 0.8)',
+            'rgba(255, 99, 132, 0.8)' 
+        ];
+
+        const sleepQualityChartData = {
+            labels: ['Excellent', 'Good', 'Moderate', 'Poor'],
+            datasets: [{
+                label: 'Sleep Quality',
+                data: sleepQualityData, 
+                backgroundColor: sleepQualityBackgroundColors, 
+                hoverOffset: 4 
+            }]
+        };
+        
+        const sleepQualityChart = new Chart(sleepQualityCanvasContext, {
+            type: 'doughnut',
+            data: sleepQualityChartData,
+            options: {
+                responsive: true,
+                maintainAspectRatio: false, 
+                plugins: {
+                    title: {
+                        display: true,
+                        text: 'Sleep Quality'
+                    },
+                    tooltip: { 
+                        callbacks: {
+                            label: function (context) {
+                                let label = context.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+
+                                const total = sleepQualityData.reduce((sum, currentValue) => sum + currentValue, 0);
+                                if (context.raw !== null && total > 0) {
+                                    const value = context.raw; 
+                                    const percentage = ((value / total) * 100).toFixed(1);
+                                    label += `${value} (${percentage}%)`;
+                                }
+                                return label; 
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Add graphs to page
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        mainDiv.appendChild(healthStatusCanvasDiv);
+        mainDiv.appendChild(stepsCanvasDiv);
+        mainDiv.appendChild(sleepQualityCanvasDiv);
+        mainDiv.appendChild(bubbleCanvasDiv);
+
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+        // Create data table. Rendering use Handlebars. And DataTables for display.
+        ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+        Handlebars.registerHelper("Add1", function (value, options) {
+            return parseInt(value) + 1;
+        });
+
+        // Compile the template
+        var template = Handlebars.compile(`
+			<table class="stripe">
+			    <thead>
+					<th></th>
+			        <th>Date</th>
+					<th>Patient No.</th>
+			        <th>Document ID</th>
+			        <th>Health Status</th>
+			        <th>Active Mins</th>
+			        <th>Sedentary Hours</th>
+			        <th>Steps</th>
+			        <th>Sleep Quality</th>
+			        <th>Sleep Interruptions</th>
+			        <th>Sleep Duration Hrs</th>
+			        <th>Calories</th>
+			        <th>Water Oz</th>
+			        <th>Fat</th>
+			        <th>Carbs</th>
+			        <th>Protein</th>
+				</thead>
+				<tbody>
+					{{#each documents}}
+						<tr>
+							<td></td>
+			                <td>{{date}}</td>
+							<td>{{Add1 @index}}</td>
+							<td>{{document_id}}</td>
+							<td>{{health_status}}</td>
+							<td>{{activity.active_minutes}}</td>
+							<td>{{activity.sedentary_hours}}</td>
+			                <td>{{activity.steps}}</td>
+			                <td>{{sleep.quality}}</td>
+			                <td>{{sleep.interruptions}}</td>
+							<td>{{sleep.duration_hours}}</td>
+			                <td>{{nutrition.calories}}</td>
+			                <td>{{nutrition.water_oz}}</td>
+			                <td>{{this.nutrition.macros.fat_g}}</td>
+			                <td>{{this.nutrition.macros.carbs_g}}</td>
+			                <td>{{this.nutrition.macros.protein_g}}</td>
+						</tr>
+					{{/each}}
+				</tbody>
+			</table>`);
+
+        // Execute the compiled template and print the output to the console
+        const table = template(documentsJson);
+        console.log(table);
+
+        const tableDiv = document.getElementById("table");
+
+        tableDiv.innerHTML = table;
+        
+        let dataTable = new DataTable('#table table', {
+            columnDefs: [
+                {
+                    targets: 0,
+                    className: 'dt-control',
+                    orderable: false,
+                    searchable: false
+                }
+            ],
+            order: [[1, 'asc']],
+            scrollX: true,
+            
+			// Fix for horizontal scrollbar issue
+            preDrawCallback: function (data) {
+                data.nTableWrapper.querySelectorAll('colgroup').forEach((e) => e.remove());
+            }
+        });
+
+        // Add event listener for clicking on a row
+        dataTable.on('click', 'td.dt-control', function (e) {
+            console.log("he");
+            let tr = e.target.closest('tr');
+            let row = dataTable.row(tr);
+
+            if (row.child.isShown()) {
+                // This row is already open - close it
+                row.child.hide();
+            }
+            else {
+                // Open this row
+                const document_id = row.data()[3];
+                const index = documentsJson.documents.findIndex(doc => doc.document_id === document_id);
+
+                let documentData = documentsJson.documents[index];
+                row.child(format(documentData, row.data())).show();
+            }
+        });
+
+        function format(documentData, data) {
+
+            const rowDiv = document.createElement("div");
+            
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Create Heart Rate line chart
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            
+            const heartRateCanvasDiv = document.createElement("div");
+            heartRateCanvasDiv.classList.add("canvasDiv");
+            heartRateCanvasDiv.classList.add("rowchart");
+            rowDiv.appendChild(heartRateCanvasDiv);
+
+            const heartRatesCanvas = document.createElement("canvas");
+            heartRateCanvasDiv.appendChild(heartRatesCanvas);
+
+            const heartRatesCanvasContext = heartRatesCanvas.getContext('2d');
+            const heartRates = documentData.vitals.heart_rate;
+            const heartRatesLabels = heartRates.map((_, index) => `Reading ${index + 1}`); 
+
+            const heartRatesChartData = {
+                labels: heartRatesLabels,
+                datasets: [{
+                    label: 'Heart Rate',
+                    data: heartRates, 
+                    borderColor: 'rgb(75, 192, 192)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                    tension: 0.1,
+                    fill: true
+                }]
+            };            
+
+            const heartRatesChart = new Chart(heartRatesCanvasContext, {
+                type: 'line', 
+                data: heartRatesChartData, 
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    scales: {
+                        y: {
+                            beginAtZero: false, 
+                            title: { 
+                                display: true,
+                                text: 'Heart Rate (bpm)'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `Vitals Data from ${documentData.date || 'Document'}` 
+                        }
+                    }
+                }
+            });
+            
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Create Blood Pressure line chart
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            
+            const bloodPressuresCanvasDiv = document.createElement("div");
+            bloodPressuresCanvasDiv.classList.add("canvasDiv");
+            bloodPressuresCanvasDiv.classList.add("rowchart");
+            rowDiv.appendChild(bloodPressuresCanvasDiv);
+
+            var bloodPressuresCanvas = document.createElement("canvas");
+            bloodPressuresCanvasDiv.appendChild(bloodPressuresCanvas);
+
+            const bloodPressuresCanvasContext = bloodPressuresCanvas.getContext('2d');
+            const bloodPressureReadings = documentData.vitals.blood_pressure;
+            const systolicValues = [];
+            const diastolicValues = [];
+            const labels = [];
+
+            bloodPressureReadings.forEach((readingString, index) => {
+                const parts = readingString.split('/'); // Split the string "systolic/diastolic"
+                if (parts.length === 2) { 
+                    const systolic = parseInt(parts[0], 10);
+                    const diastolic = parseInt(parts[1], 10); 
+                    
+                    systolicValues.push(systolic);
+                    diastolicValues.push(diastolic);
+                    labels.push(`Reading ${index + 1}`); 
+                    
+                } else {
+                    console.warn(`Unexpected blood pressure format: ${readingString}`);
+                }
+            });
+
+            const bloodPressuresChartData = {
+                labels: labels, 
+                datasets: [
+                    {
+                        label: 'Systolic', 
+                        data: systolicValues, 
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.5)',
+                        tension: 0.1,
+                        fill: false 
+                    },
+                    {
+                        label: 'Diastolic', 
+                        data: diastolicValues, 
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                        tension: 0.1,
+                        fill: false 
+                    }
+                ]
+            };            
+
+            const bloodPressuresChart = new Chart(bloodPressuresCanvasContext, {
+                type: 'line',
+                data: bloodPressuresChartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: true,
+                    scales: {
+                        y: {
+                            beginAtZero: false, 
+                            title: { 
+                                display: true,
+                                text: 'Blood Pressure (mmHg)'
+                            }
+                        },
+                        x: { 
+                            title: {
+                                display: true,
+                                text: 'Reading'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `Blood Pressure Readings from ${documentData.date || 'Document'}` 
+                        }
+                    }
+                }
+            });
+            
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Create Macro Nutriends pie chart
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            const macrosCanvasDiv = document.createElement("div");
+            macrosCanvasDiv.classList.add("canvasDiv");
+            macrosCanvasDiv.classList.add("rowchart");
+            rowDiv.appendChild(macrosCanvasDiv);
+
+            const macrosCanvas = document.createElement("canvas");
+            macrosCanvasDiv.appendChild(macrosCanvas);
+
+            const macrosCanvasContext = macrosCanvas.getContext('2d');
+
+            const macrosData = [
+                documentData.nutrition.macros.protein_g || 0, 
+                documentData.nutrition.macros.fat_g || 0,     
+                documentData.nutrition.macros.carbs_g || 0   
+            ];
+
+            const backgroundColors = [
+                'rgba(255, 99, 132, 0.8)', // Reddish for Protein
+                'rgba(54, 162, 235, 0.8)', // Bluish for Fat
+                'rgba(255, 206, 86, 0.8)'  // Yellowish for Carbs
+            ];
+
+            const macrosChartData = {
+                labels: ['Protein', 'Fat', 'Carbs'], 
+                datasets: [{
+                    label: 'Macros in Grams',
+                    data: macrosData,
+                    backgroundColor: backgroundColors,
+                    hoverOffset: 4 
+                }]
+            };
+
+            const macrosChart = new Chart(macrosCanvasContext, {
+                type: 'pie',
+                data: macrosChartData, 
+                options: {
+                    responsive: true, 
+                    maintainAspectRatio: false, 
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `Macronutrient Breakdown (Grams) - ${documentData && documentData.date ? documentData.date : 'Data'}`
+                        },
+                        tooltip: { 
+                            callbacks: {
+                                label: function (context) {
+                                    let label = context.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    
+                                    const totalMacros = macrosData.reduce((sum, currentValue) => sum + currentValue, 0);
+                                    if (context.raw !== null && totalMacros > 0) {
+                                        const value = context.raw; 
+                                        const percentage = ((value / totalMacros) * 100).toFixed(1);
+                                        label += `${value}g (${percentage}%)`;
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            // Create Sleep and Sendentary Hours radar chart
+            ////////////////////////////////////////////////////////////////////////////////////////////////////
+            const sleepCanvasDiv = document.createElement("div");
+            sleepCanvasDiv.classList.add("canvasDiv");
+            sleepCanvasDiv.classList.add("radarchart");
+            sleepCanvasDiv.classList.add("rowchart");
+            rowDiv.appendChild(sleepCanvasDiv);
+
+            const radarCanvas = document.createElement("canvas");
+            sleepCanvasDiv.appendChild(radarCanvas);
+
+            const radarCanvasContext = radarCanvas.getContext('2d');
+            
+            const sleepDuration = documentData.sleep.duration_hours;
+            const sleepInterruptions = documentData.sleep.interruptions;
+            const sedentaryHours = documentData.activity.sedentary_hours;
+            const activeMinsPerHour = Math.round(documentData.activity.active_minutes / 24);
+
+            // Convert sleep quality string to a numerical score
+            let sleepQualityScore = 0; // Default score if unknown
+            const qualityString = documentData.sleep.quality;
+
+            const lowerQuality = qualityString.toLowerCase();
+            if (lowerQuality === 'poor') {
+                sleepQualityScore = 1;
+            } else if (lowerQuality === 'fair') {
+                sleepQualityScore = 2;
+            } else if (lowerQuality === 'good') {
+                sleepQualityScore = 3;
+            }
+            else if (lowerQuality === 'excellent') {
+                sleepQualityScore = 4;
+            }
+            
+            const radarLabels = [
+                'Sleep Interruptions',
+                'Sleep Duration (Hours)',
+                'Sleep Quality (Score)', 
+                'Sedentary Hours',
+                'Active Mins Per Hour Average'
+            ];
+            
+	        const documentDataset = {
+	            label: documentData.date || 'Single Day Data', 
+                data: [
+                    sleepInterruptions,
+                    sleepDuration,     
+                    sleepQualityScore,  
+                    sedentaryHours,    
+                    activeMinsPerHour
+	            ],
+	            backgroundColor: 'rgba(162, 162, 235, 0.4)',
+                borderColor: 'rgba(162, 162, 235, 1)',    
+	            pointBackgroundColor: 'rgba(162, 162, 235, 1)', 
+	            pointHoverBackgroundColor: '#fff',
+	            pointHoverBorderColor: 'rgba(54, 162, 235, 1)'
+	        };
+            
+	        const chartData = {
+	            labels: radarLabels, 
+	            datasets: [documentDataset] 
+            };
+
+            const radarChart = new Chart(radarCanvasContext, {
+                type: 'radar', 
+                data: chartData, 
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: { 
+                            beginAtZero: true, 
+                            pointLabels: { 
+                                font: {
+                                    size: 12
+                                }
+                            },
+                            ticks: {
+                                stepSize: 2
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `Daily Health & Activity Radar Chart (${documentData.date})`
+                        },
+                        legend: { 
+                            display: true,
+                            position: 'top',
+                        },
+                        tooltip: { 
+                            callbacks: {
+                                label: function (context) {
+                                    const label = context.chart.data.labels[context.dataIndex]; 
+                                    const value = context.raw;
+
+                                    if (label === 'Sleep Quality (Score)') {
+                                        if (value === 1) return `${label}: Poor`;
+                                        if (value === 2) return `${label}: Fair`;
+                                        if (value === 3) return `${label}: Good`;
+                                        if (value === 3) return `${label}: Excellent`;
+                                        if (value === 0) return `${label}: Unknown`;
+                                    }
+                                    return `${label}: ${value}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });            
+
+
+            return rowDiv;
+        }
+
+    </script>
+
+</body>
+</html>
